@@ -12,48 +12,53 @@ from dotenv import load_dotenv
 env_path = Path(__file__).parent / '.env'
 load_dotenv(dotenv_path=env_path)
 
-# Debug: Check if keys are loaded
+# =============================================================================
+# SIDEBAR - Shows on the left side of the page
+# =============================================================================
+# st.sidebar.X puts elements in the sidebar instead of main area
 with st.sidebar:
     st.header("🔑 API Keys Status")
+    
+    # Check if environment variables are loaded
     if os.getenv("ANTHROPIC_API_KEY"):
-        st.success("✅ Anthropic API")
+        st.success("✅ Anthropic API")  # Green box
     else:
-        st.error("❌ Anthropic API")
+        st.error("❌ Anthropic API")    # Red box
     
     if os.getenv("ALPACA_API_KEY"):
         st.success("✅ Alpaca API")
-        # Show first few chars
-        key = os.getenv("ALPACA_API_KEY")
-        
     else:
         st.error("❌ Alpaca API")
 
 from langchain_core.messages import HumanMessage
 from finance_analysts.graph import create_graph
 
-# Set page title
-st.title("💬 Financial Analyst Chatbot")
+# =============================================================================
+# PAGE SETUP
+# =============================================================================
+# st.title() - Big header at top of page
+st.title("💬 Your Finance Analysts")
 
-# Add a button to force reload
+# Reload button - for development, forces graph to rebuild when you change agent code
 if st.sidebar.button("🔄 Reload Graph"):
     if "graph" in st.session_state:
         del st.session_state.graph
-    st.rerun()
+    st.rerun()  # Reruns the entire script
 
-# Initialize the graph (only once)
+# =============================================================================
+# SESSION STATE - Persists data between reruns
+# =============================================================================
+# Streamlit reruns the ENTIRE script every time user interacts (clicks, types, etc)
+# st.session_state is a dict that persists between reruns
+# Without it, variables reset to initial values on every interaction
+
+# Initialize the graph (only once, not on every rerun)
 if "graph" not in st.session_state:
+    # st.spinner() - Shows loading animation while code inside runs
     with st.spinner("🔨 Building agent graph..."):
-        # Clear any Python module cache
-        import importlib
-        import finance_analysts.agents
-        import finance_analysts.graph
-        importlib.reload(finance_analysts.agents)
-        importlib.reload(finance_analysts.graph)
-        
         st.session_state.graph = create_graph()
-        st.sidebar.info("✅ Graph loaded")
 
-# Initialize chat state (only once)
+# Initialize LangGraph state (messages, results, next_agents)
 if "state" not in st.session_state:
     st.session_state.state = {
         "messages": [],
@@ -61,61 +66,78 @@ if "state" not in st.session_state:
         "next_agents": []
     }
 
-# Initialize chat history for display (only once)
+# Initialize chat history for UI display
+# (separate from LangGraph state - this is just for showing messages)
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
-# Show all previous messages
+# =============================================================================
+# DISPLAY CHAT HISTORY
+# =============================================================================
+# Loop through previous messages and display them
 for message in st.session_state.chat_history:
+    # st.chat_message() - Creates a chat bubble with avatar
+    # role="user" shows person icon, role="assistant" shows bot icon
     with st.chat_message(message["role"]):
-        st.write(message["content"])
+        content = message["content"]
+        if message["role"] == "assistant":
+            content = content.replace("$", "\\$")  # Fix LaTeX rendering
+        st.write(content)
 
-# Get user input
+# =============================================================================
+# CHAT INPUT
+# =============================================================================
+# st.chat_input() - Creates the text input box at bottom of page
+# Returns None if empty, returns text when user presses Enter
 user_input = st.chat_input("Ask me about stocks...")
 
-# If user sent a message
+# =============================================================================
+# HANDLE USER INPUT
+# =============================================================================
 if user_input:
-    # Show user message
+    # Show user's message immediately
     with st.chat_message("user"):
         st.write(user_input)
     
-    # Save user message to history
+    # Save to chat history (for display on next rerun)
     st.session_state.chat_history.append({
         "role": "user",
         "content": user_input
     })
     
-    # Add to state
+    # Add to LangGraph state
     st.session_state.state["messages"].append(HumanMessage(content=user_input))
-    st.session_state.state["results"] = {}
-    st.session_state.state["next_agents"] = []
+    st.session_state.state["results"] = {}       # Clear previous results
+    st.session_state.state["next_agents"] = []   # Clear previous routing
     
-    # Get response
+    # Show assistant response
     with st.chat_message("assistant"):
+        # st.spinner() - Shows "Thinking..." while graph runs
         with st.spinner("Thinking..."):
             try:
-                # Run the graph
+                # Run the LangGraph
                 final_state = st.session_state.graph.invoke(st.session_state.state)
                 st.session_state.state = final_state
                 
-                # Debug: Show what agents ran
+                # Show which agents ran
+                # st.caption() - Small gray text, good for metadata
                 if final_state.get("results"):
-                    with st.expander("🔍 Debug: Agents that ran"):
-                        for agent, result in final_state["results"].items():
-                            st.write(f"**{agent}:** {result[:200]}...")
+                    agents_ran = list(final_state["results"].keys())
+                    st.caption(f"🎯 Routed: {' → '.join(agents_ran)}")
                 
-                # Find the AI response
+                # Find the AI response (last AIMessage in state)
                 response = None
                 for msg in reversed(final_state["messages"]):
                     if hasattr(msg, 'type') and msg.type == 'ai':
                         response = msg.content
                         break
                 
-                # Show response
+                # Display response
                 if response:
+                    response = response.replace("$", "\\$")  # Fix LaTeX rendering
                     st.write(response)
                     
-                    # Save to history
+                    # Save to chat history
                     st.session_state.chat_history.append({
                         "role": "assistant",
                         "content": response
@@ -124,7 +146,10 @@ if user_input:
                     st.write("Sorry, no response generated.")
                     
             except Exception as e:
+                # st.error() - Red error box
                 st.error(f"❌ Error: {str(e)}")
                 import traceback
+                # st.expander() - Collapsible section
                 with st.expander("Full error details"):
+                    # st.code() - Monospace code block
                     st.code(traceback.format_exc())

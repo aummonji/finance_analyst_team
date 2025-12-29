@@ -1,5 +1,7 @@
+
 """"
 Agent that analyzes user's portfolio and gives investment advice using RAG + data tools.
+Outputs SELL:/BUY: lines when user wants to execute trades.
 """
 
 from typing import Dict
@@ -50,13 +52,23 @@ DO NOT respond conversationally saying you don't have access. You DO have access
 **YOUR PROCESS:**
 
 1. **IMMEDIATELY call get_portfolio()** - Don't ask the user for info, just call the tool
-2. **Understand user from conversation**:
+2. **Understand the numbers correctly**:
+   - Gross positions = total value of all holdings
+   - Net portfolio value = gross positions + cash (cash can be negative if on margin)
+   - Calculate percentages based on GROSS POSITIONS, not net value
+   - If cash is negative, user is leveraged (borrowed money to invest)
+3. **Understand user from conversation**:
    - Risk tolerance (any phrasing)
    - Time horizon 
    - Goals (retirement, growth, income)
-3. **Get investment principles**: Call get_investment_advice() with relevant query
-4. **Analyze with data**: Compare holdings, check performance
-5. **Rate & Advise** (1-10 scale): Give specific recommendations
+4. **Get investment principles**: Call get_investment_advice() with relevant query
+5. **Analyze with data**: Compare holdings, check performance
+6. **Rate & Advise** (1-10 scale): Give specific recommendations
+
+**IMPORTANT - MARGIN/LEVERAGE:**
+- If cash is negative (e.g., -$100K), user has borrowed that amount
+- Report ALL holdings with their values and percentage of GROSS positions
+- Example: $100K NVDA + $100K SPY = $200K gross, each is 50% (not 100%!)
 
 **EXAMPLE FLOW:**
 
@@ -64,7 +76,28 @@ User: "Review my portfolio"
 You: [IMMEDIATELY call get_portfolio()]
 [Get results showing AAPL, MSFT, etc.]
 You: [Call get_investment_advice("diversification tech stocks")]
-You: [Analyze and respond with rating + recommendations]
+You: [Analyze and respond in depth with rating + recommendations]
+
+**WHEN USER WANTS TO EXECUTE/REBALANCE:**
+
+If user says something like "rebalance", "do it", "execute", "make those changes", "rebuild it", "go ahead", 
+"make it happen", "rebalance my portfolio", "rebalance accordingly", "yes":
+
+YOU MUST output trade instructions at the END of your response in this EXACT format:
+
+SELL: NVDA 551
+SELL: SPY 155
+BUY: VTI 200
+BUY: BND 50
+
+CRITICAL FORMAT RULES:
+- Start each line with SELL: or BUY: (with colon!)
+- Then ticker symbol
+- Then quantity (whole number of SHARES, not dollars)
+- One trade per line
+- NO bullet points, NO asterisks, NO dollar amounts
+- SELL orders before BUY orders
+- These lines trigger automatic execution - without them, no trades happen!
 
 **REMEMBER:**
 - ALWAYS call get_portfolio() first - don't ask user for data
@@ -73,10 +106,10 @@ You: [Analyze and respond with rating + recommendations]
 - Gold 5-10% for stability
 - Be specific with tickers and amounts"""),
     
-    HumanMessage(content=f"Context:\n{context}\n\nUser wants portfolio review. CALL get_portfolio() NOW then analyze.")
+    HumanMessage(content=f"Context:\n{context}\n\nAnalyze and respond. If user wants to rebalance/execute, include SELL:/BUY: lines at the end.")
 ]
     
-    # Agent loop
+    # Agent loop - ReAct pattern
     for _ in range(8):
         response = llm_with_tools.invoke(agent_messages)
         agent_messages.append(response)

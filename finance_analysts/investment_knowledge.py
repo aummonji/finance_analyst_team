@@ -17,9 +17,15 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+
 def _load_vector_store():
     """Load the investment principles into a vector store."""
-    loader = TextLoader("investment_principles.txt")
+    from pathlib import Path
+
+ # Get path relative to this file's location
+    file_path = Path(__file__).parent.parent / "investment_principles.txt"
+   
+    loader = TextLoader(str(file_path), encoding='utf-8')
     docs = loader.load()
     
     splitter = RecursiveCharacterTextSplitter(
@@ -28,7 +34,6 @@ def _load_vector_store():
     )
     chunks = splitter.split_documents(docs)
     
-    # Use OpenAI embeddings
     embeddings = OpenAIEmbeddings(
         model="text-embedding-3-small"  
     )

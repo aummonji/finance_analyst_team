@@ -1,3 +1,4 @@
+
 """
 Financial Analyst Team - Clean Implementation
 
@@ -36,6 +37,42 @@ from finance_analysts.trading import (
 
 logger = logging.getLogger(__name__)
 llm = ChatAnthropic(model="claude-sonnet-4-20250514", temperature=0)
+
+
+# =============================================================================
+# NEW: Parse trade plan from portfolio_advisor output
+# =============================================================================
+# Looks for any lines starting with "SELL:" or "BUY:" in portfolio_advisor output.
+# No fancy markers needed - the presence of these lines IS the trade plan.
+#
+# Example input:  "Here's my advice... SELL: NVDA 60\nBUY: BND 50"
+# Example output: [{"action": "SELL", "ticker": "NVDA", "quantity": 60},
+#                  {"action": "BUY", "ticker": "BND", "quantity": 50}]
+# =============================================================================
+
+def parse_trade_plan(text: str) -> list:
+    """Parse any SELL:/BUY: lines from portfolio_advisor output."""
+    trades = []
+    
+    for line in text.split("\n"):
+        line = line.strip()
+        
+        if line.startswith("SELL:") or line.startswith("BUY:"):
+            # "SELL: NVDA 60" → action="SELL", rest=" NVDA 60"
+            action, rest = line.split(":", 1)
+            parts = rest.strip().split()
+            
+            if len(parts) >= 2:
+                try:
+                    trades.append({
+                        "action": action.strip().upper(),
+                        "ticker": parts[0].upper(),
+                        "quantity": int(parts[1])
+                    })
+                except ValueError:
+                    continue
+    
+    return trades
 
 
 def manage_conversation_length(state: FinancialState) -> dict:
@@ -86,13 +123,27 @@ Keep it concise (3-4 sentences)."""
 def orchestrator(state: FinancialState) -> dict:
     """
     Orchestrator: Decides which agent(s) to call next.
-    
+    -
     Uses LLM to intelligently determine when work is complete.
     """
     logger.info("🎯 Orchestrator analyzing request...")
     
     messages = state.get("messages", [])
     results = state.get("results", {})
+    
+    # =========================================================================
+    # Check if portfolio_advisor output contains trade instructions
+    # Only trigger if lines START with SELL: or BUY: (not just mentioned)
+    # =========================================================================
+    if "portfolio_advisor" in results and "trader" not in results:
+        advisor_output = results["portfolio_advisor"]
+        has_trade_plan = any(
+            line.strip().startswith("SELL:") or line.strip().startswith("BUY:")
+            for line in advisor_output.split("\n")
+        )
+        if has_trade_plan:
+            logger.info("  📋 Trade plan detected → routing to trader")
+            return {"next_agents": ["trader"]}
     
     # Build context about completed work
     completed = list(results.keys())
@@ -136,20 +187,35 @@ PORTFOLIO ADVISOR triggers:
 - "should I add crypto/bonds/gold"
 
 EXAMPLES:
+Query: "hello" | Done: "" → "done"
 Query: "what's AAPL price?" | Done: "" → "price"
 Query: "what's AAPL price?" | Done: "price" → "done"
+Query: "give me a report on AAPL" | Done: "" → "price,fundamental"
+Query: "full analysis of TSLA" | Done: "" → "price,fundamental"
+Query: "comprehensive report" | Done: "" → "price,fundamental"
 Query: "compare MSFT vs AAPL" | Done: "" → "price,fundamental"  
 Query: "compare MSFT vs AAPL" | Done: "price,fundamental" → "reporter"
 Query: "compare MSFT vs AAPL" | Done: "price,fundamental,reporter" → "done"
+Query: "give me a report" | Done: "price,fundamental" → "reporter"
 Query: "get current portfolio" | Done: "" → "trader"
 Query: "get current portfolio" | Done: "trader" → "done"
-Query: "rate my portfolio" | Done: "" → "portfolio_advisor"
+Query: "buy 10 AAPL" | Done: "" → "trader"
+Query: "sell my NVDA" | Done: "" → "trader"
+Query: "rate MY portfolio" | Done: "" → "portfolio_advisor"
+Query: "review my portfolio" | Done: "" → "portfolio_advisor"
+Query: "rebalance my portfolio" | Done: "" → "portfolio_advisor"
+Query: "rebuild my portfolio" | Done: "" → "portfolio_advisor"
 Query: "rate my portfolio" | Done: "portfolio_advisor" → "done"
+Query: "what should I invest in" | Done: "" → "portfolio_advisor"
 Query: "I'm 30 and aggressive, what should I invest in?" | Done: "" → "portfolio_advisor"
 Query: "should I add crypto?" | Done: "" → "portfolio_advisor"
-Query: "analyze my holdings and give advice" | Done: "" → "portfolio_advisor"
+Query: "analyze my holdings" | Done: "" → "portfolio_advisor"
 
-CRITICAL: If work answers the query → return "done". Don't repeat agents!
+CRITICAL: 
+- "report" or "analysis" on a STOCK → price,fundamental then reporter
+- "my portfolio" or "investment advice" or "rebalance" → portfolio_advisor (NOT trader!)
+- "buy/sell X shares" → trader
+- If work answers the query → return "done". Don't repeat agents!
 
 Respond ONLY with agent names or "done":"""
     
@@ -234,7 +300,7 @@ get_stock_news - Recent news with sentiment
 
 
 Be intelligent with tool usage based on the question."""),
-        HumanMessage(content=f"Context:\n{context}\n\nGet relevant fundamental data.")
+        HumanMessage(content=f"Context:\n{context}\n\nGet relevant company data.")
     ]
     
     for _ in range(4):
@@ -253,7 +319,7 @@ Be intelligent with tool usage based on the question."""),
             elif tool_name == "get_financial_statements":
                 result = get_financial_statements.invoke(tool_call["args"])
             else:
-                result = get_earnings_data.invoke(tool_call["args"])
+                result = "Unknown tool"
             
             agent_messages.append(
                 ToolMessage(content=str(result), tool_call_id=tool_call["id"])
@@ -271,7 +337,52 @@ def trader(state: FinancialState) -> dict:
     logger.info("💼 Trader working...")
     
     messages = state.get("messages", [])
+    results = state.get("results", {})
     
+    # =========================================================================
+    # NEW: Check if portfolio_advisor has a TRADE PLAN to execute
+    # If so, parse and execute the trades automatically
+    # =========================================================================
+    if "portfolio_advisor" in results:
+        trades = parse_trade_plan(results["portfolio_advisor"])
+        
+        if trades:
+            logger.info(f"  📋 Executing trade plan: {len(trades)} trades")
+            execution_results = []
+            
+            # Separate sells and buys - execute sells first to free up buying power
+            sells = [t for t in trades if t["action"] == "SELL"]
+            buys = [t for t in trades if t["action"] == "BUY"]
+            
+            # Execute SELL orders first
+            for trade in sells:
+                logger.info(f"    SELL {trade['quantity']} {trade['ticker']}")
+                result = sell_stock.invoke({"ticker": trade["ticker"], "quantity": trade["quantity"]})
+                execution_results.append(f"SELL {trade['ticker']} x{trade['quantity']}: {result}")
+            
+            # Then execute BUY orders
+            for trade in buys:
+                logger.info(f"    BUY {trade['quantity']} {trade['ticker']}")
+                result = buy_stock.invoke({"ticker": trade["ticker"], "quantity": trade["quantity"]})
+                execution_results.append(f"BUY {trade['ticker']} x{trade['quantity']}: {result}")
+            
+            # Get updated portfolio to show user
+            portfolio_result = get_portfolio.invoke({})
+            
+            summary = f"""Trade Plan Executed!
+
+Trades Completed:
+{chr(10).join(execution_results)}
+
+Updated Portfolio:
+{portfolio_result}"""
+            
+            logger.info(f"  ✓ Trade plan executed: {len(trades)} trades")
+            return {"results": {"trader": summary}}
+    
+    # =========================================================================
+    # Normal LLM-driven trading (for simple buy/sell requests like "buy 10 AAPL")
+    # =========================================================================
     tools = [buy_stock, sell_stock, get_portfolio, get_orders]
     llm_with_tools = llm.bind_tools(tools)
     
@@ -434,7 +545,10 @@ def synthesize_final_response(state: FinancialState) -> dict:
         parts.append(results["portfolio_advisor"])
     
     if not parts:
-        return {"messages": [AIMessage(content="I need more information to help you.")]}
+        # No agents ran - just respond conversationally (e.g., for "hello")
+        prompt = f"User said: '{user_query}'. Respond naturally as a helpful financial assistant."
+        response = llm.invoke([HumanMessage(content=prompt)])
+        return {"messages": [AIMessage(content=response.content)]}
     
     # Get conversation context
     context = "\n\n".join([
