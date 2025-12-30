@@ -152,30 +152,8 @@ def get_stock_news(ticker: str) -> str:
                 
                 return f"Recent News - {ticker.upper()}:\n\n" + "\n\n".join(news_items)
         except Exception as e:
-            logger.warning(f"Alpha Vantage failed: {e}, falling back to yfinance")
-    
-    if not YF_AVAILABLE:
-        return "No news sources available"
-    
-    try:
-        stock = yf.Ticker(ticker)
-        news = stock.news
-        
-        if not news:
-            return f"No recent news for {ticker}"
-        
-        news_items = []
-        for item in news[:5]:
-            title = item.get('title', 'No title')
-            publisher = item.get('publisher', 'Unknown')
-            news_items.append(f"• {title}\n  Source: {publisher}")
-        
-        return f"Recent News - {ticker.upper()}:\n\n" + "\n\n".join(news_items)
-        
-    except Exception as e:
-        logger.error(f"Error fetching news for {ticker}: {e}")
-        return f"Could not fetch news for {ticker}: {str(e)}"
-
+            logger.warning(f"Alpha Vantage failed: {e}")
+   
 
 @tool
 def get_company_overview(ticker: str) -> str:
