@@ -258,21 +258,34 @@ def price_analyst(state: FinancialState) -> dict:
     ]
     
     for _ in range(3):
+        # Prevents infinite loops if LLM keeps calling tools forever. 
+        # For price analysis, 3 iterations is usually enough (get quote, maybe get history, then answer)
+
+
+        # Send conversation history to LLM, get response
+        # LLM decides to call a tool (returns AIMessage with tool_calls)
         response = llm_with_tools.invoke(agent_messages)
+        # response.tool_calls = [{"name": "get_stock_quote", "args": {"ticker": "AAPL"}, "id": "call_123"}]
+
         agent_messages.append(response)
-        
+        # Add LLM's response to conversation history
+
         if not response.tool_calls:
             break
         
         for tool_call in response.tool_calls:
             if tool_call["name"] == "get_stock_quote":
+                # execute the tool
                 result = get_stock_quote.invoke(tool_call["args"])
             else:
                 result = get_historical_prices.invoke(tool_call["args"])
             
+            # send result back as ToolMessage
             agent_messages.append(
                 ToolMessage(content=str(result), tool_call_id=tool_call["id"])
             )
+            # Without IDs, LLM wouldn't know which result goes with which call
+            # LLM reads the string and continues reasoning
     
     analysis = agent_messages[-1].content if isinstance(agent_messages[-1], AIMessage) else "Price analysis complete"
     

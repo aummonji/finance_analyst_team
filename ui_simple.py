@@ -36,7 +36,7 @@ from finance_analysts.graph import create_graph
 # =============================================================================
 # PAGE SETUP
 # =============================================================================
-# st.title() - Big header at top of page
+
 st.title("💬 Your Finance Analysts")
 
 # Reload button - for development, forces graph to rebuild when you change agent code
